@@ -3,3 +3,4 @@ pandas
 scikit-learn
 matplotlib
 numpy
+scikit-learn-extra   # para K-Medoids real (opcional, pero recomendado)

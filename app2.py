@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-from model import *
+from clustering2 import *
 
 # Page configuration
 st.set_page_config(page_title="Advanced Clustering App", layout="wide")

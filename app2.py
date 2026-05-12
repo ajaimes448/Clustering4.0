@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-from mpl_toolkits.mplot3d import Axes3D  # movido aquí para evitar importación condicional
 from model import *
 
 # Page configuration
@@ -28,12 +27,9 @@ else:
                                placeholder="https://www.kaggle.com/datasets/username/dataset-name")
     if kaggle_url and st.button("Load Dataset"):
         with st.spinner("Loading dataset from Kaggle..."):
-            # Nota: load_data ya no usa st, simplemente devuelve None para Kaggle
             df = load_data("Kaggle URL", kaggle_url=kaggle_url)
             if df is not None:
                 st.success(f"Dataset loaded successfully! Shape: {df.shape}")
-            else:
-                st.error("Kaggle download requires manual setup. Please download the CSV and use 'Upload CSV' instead.")
 
 if df is None:
     st.stop()
@@ -69,11 +65,11 @@ else:  # PCA Reduction
         all_features = df.select_dtypes(include=[np.number]).columns.tolist()
         st.info(f"Using all {len(all_features)} numerical features for PCA")
     
+    pca_components = st.slider("Number of PCA components:", 2, min(10, len(all_features)), 2)
+    
     if len(all_features) < 2:
         st.warning("Need at least 2 features for PCA")
         st.stop()
-    
-    pca_components = st.slider("Number of PCA components:", 2, min(10, len(all_features)), 2)
 
 # Preprocessing options
 st.subheader("Preprocessing Options")
@@ -94,7 +90,7 @@ model_name = st.selectbox(
 
 # Model parameters
 params = {}
-if model_name in ["K-Means", "K-Medoids", "Hierarchical"]:
+if model_name == "K-Means" or model_name == "K-Medoids" or model_name == "Hierarchical":
     n_clusters = st.slider("Number of clusters:", 2, 10, 3)
     params['n_clusters'] = n_clusters
     
@@ -113,14 +109,15 @@ elif model_name == "DBSCAN":
 # Run clustering button
 if st.button("Run Clustering", type="primary"):
     with st.spinner("Processing data and running clustering..."):
-        # Preprocess data and keep aligned indices
+        # Preprocess data
         if feature_method == "Manual Selection":
-            X, kept_index = preprocessing(df, features, scale=scale_data, encode=encode_data, 
-                                         handle_missing=handle_missing)
+            X = preprocessing(df, features, scale=scale_data, encode=encode_data, 
+                            handle_missing=handle_missing)
             feature_names = features
         else:  # PCA Reduction
-            X_full, kept_index = preprocessing(df, all_features, scale=scale_data, encode=encode_data,
-                                              handle_missing=handle_missing)
+            # Preprocess all selected features
+            X_full = preprocessing(df, all_features, scale=scale_data, encode=encode_data,
+                                  handle_missing=handle_missing)
             # Apply PCA
             X, explained_var = reduce_dimensions_pca(X_full, n_components=pca_components)
             feature_names = [f"PC{i+1} ({var:.2%})" for i, var in enumerate(explained_var)]
@@ -129,22 +126,8 @@ if st.button("Run Clustering", type="primary"):
             for i, var in enumerate(explained_var):
                 st.write(f"  - PC{i+1}: {var:.2%}")
         
-        # Verificar que tenemos al menos 2 muestras
-        if X.shape[0] < 2:
-            st.error("No hay suficientes muestras después del preprocesamiento. Revisa los valores faltantes.")
-            st.stop()
-        
         # Get and run clustering model
         clustering_func = get_clustering_model(model_name)
-        
-        # Si el modelo es K-Medoids y no está disponible, mostrar advertencia
-        if model_name == "K-Medoids":
-            try:
-                from sklearn_extra.cluster import KMedoids
-                kmedoids_available = True
-            except ImportError:
-                kmedoids_available = False
-                st.warning("⚠️ scikit-learn-extra no está instalado. Usando K-Means como alternativa para K-Medoids.")
         
         if model_name == "DBSCAN":
             model, labels = clustering_func(X, **params)
@@ -153,23 +136,16 @@ if st.button("Run Clustering", type="primary"):
         else:
             model, labels = clustering_func(X, **params)
         
-        # Contar clusters reales (excluyendo ruido -1 en DBSCAN)
-        unique_labels = set(labels)
-        n_clusters_found = len(unique_labels) - (1 if -1 in unique_labels else 0)
-        
-        if n_clusters_found < 2:
-            st.error(f"El algoritmo produjo {n_clusters_found} clusters. Ajusta los parámetros (para DBSCAN prueba con eps más pequeño o min_samples más bajo).")
-            st.stop()
-        
-        # Construir DataFrame resultado con índices alineados
+        # Add labels to dataframe (for manual selection) or create result dataframe
         if feature_method == "Manual Selection":
-            result_df = df.loc[kept_index, features].copy()
+            result_df = df[features].copy()
+            result_df["Cluster"] = labels
         else:
-            result_df = pd.DataFrame(X, columns=feature_names, index=kept_index)
-        result_df["Cluster"] = labels
+            result_df = pd.DataFrame(X, columns=feature_names)
+            result_df["Cluster"] = labels
         
         # Display results
-        st.success(f"Clustering completed! Found {n_clusters_found} clusters")
+        st.success(f"Clustering completed! Found {len(set(labels)) - (1 if -1 in labels else 0)} clusters")
         
         # Evaluation metrics
         st.subheader("Clustering Evaluation")
@@ -184,6 +160,7 @@ if st.button("Run Clustering", type="primary"):
                 st.metric("Davies-Bouldin Index", f"{db_score:.3f}")
                 st.caption("Lower is better")
             with col3:
+                n_clusters_found = len(set(labels)) - (1 if -1 in labels else 0)
                 st.metric("Number of Clusters", n_clusters_found)
         else:
             st.warning("Could not compute evaluation metrics (need at least 2 clusters)")
@@ -201,6 +178,7 @@ if st.button("Run Clustering", type="primary"):
             plt.colorbar(scatter, ax=ax, label='Cluster')
             st.pyplot(fig)
         elif X.shape[1] == 3:  # 3D visualization
+            from mpl_toolkits.mplot3d import Axes3D
             fig = plt.figure(figsize=(10, 8))
             ax = fig.add_subplot(111, projection='3d')
             scatter = ax.scatter(X[:, 0], X[:, 1], X[:, 2], c=labels, 
@@ -229,23 +207,21 @@ if st.button("Run Clustering", type="primary"):
         # Download option
         csv = result_df.to_csv(index=False)
         st.download_button(
-            label="💾 Download clustered data as CSV",
+            label="Download clustered data as CSV",
             data=csv,
             file_name=f"clustered_data_{model_name.lower()}.csv",
             mime="text/csv"
         )
         
-        # Cluster statistics (only if more than one cluster)
-        if st.checkbox("Show cluster statistics") and n_clusters_found > 1:
+        # Cluster statistics
+        if st.checkbox("Show cluster statistics"):
             st.subheader("Cluster Statistics")
             if feature_method == "Manual Selection":
                 cluster_stats = result_df.groupby('Cluster')[features].mean()
             else:
                 cluster_stats = result_df.groupby('Cluster')[feature_names].mean()
             st.dataframe(cluster_stats)
-        elif n_clusters_found <= 1:
-            st.info("No se pueden mostrar estadísticas porque solo hay un cluster.")
 
 st.markdown("---")
-st.caption("💡 Tip: For DBSCAN, clusters with label -1 are considered noise/outliers")
+st.caption("Tip: For DBSCAN, clusters with label -1 are considered noise/outliers")
 
